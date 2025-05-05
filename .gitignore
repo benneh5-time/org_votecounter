@@ -1,0 +1,6 @@
+main.py
+gui.spec
+config.json
+cache/*
+dist/*
+build/*
