@@ -137,10 +137,10 @@ def extract_vote_from_post_content(content_html, valid_players, player_akas):
                 match = re.match(r'vote:\s*(.+)', cleaned, re.IGNORECASE)
                 if match:
                     voted_raw = match.group(1).strip().lower()
-                    result = process.extractOne(voted_raw, valid_players, score_cutoff=70)
+                    result = process.extractOne(voted_raw, match_pool, score_cutoff=70)
                     if result:
                         matched, score = result
-                        canonical_name = aka_lookup[matched]
+                        canonical_name = aka_lookup.get(matched, matched)
                         last_vote = (canonical_name, None)
                     else:
                         last_vote = (match.group(1).strip(), True)
@@ -355,7 +355,6 @@ def run_gui():
         root.clipboard_clear()
         root.clipboard_append(result_text.get("1.0", tk.END))
         root.update()
-        messagebox.showinfo("Copied", "Votecount copied to clipboard!")
 
     def player_aka():
         global player_akas
