@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import scrolledtext, messagebox, filedialog
+from tkinter import scrolledtext, messagebox, filedialog, simpledialog
 from tkinter import *
 import math
 import requests
@@ -15,6 +15,7 @@ import customtkinter
 CACHE_DIR = 'cache'
 base_url = "https://forums.totalwar.org/vb/"
 CONFIG_FILE = 'config.json'
+player_akas = {}
 
 def extract_thread_key(url: str) -> str:
     match = re.search(r'\.php/([^/?#]+)', url)
@@ -109,11 +110,19 @@ def get_post_metadata(post):
         'link': full_link
     }
     
-def extract_vote_from_post_content(content_html, valid_players):
+def extract_vote_from_post_content(content_html, valid_players, player_akas):
     soup = BeautifulSoup(content_html, "html.parser")
     bold_tags = soup.find_all("b")
 
     last_vote = None
+    
+    aka_lookup = {}
+    for player in valid_players:
+        aka_lookup[player.lower()] = player
+        for aka in player_akas.get(player, []):
+            aka_lookup[aka.lower()] = player
+            
+    match_pool = list(aka_lookup.keys())
 
     for b in bold_tags:
         text = b.get_text(separator="\n").strip()  # Treat <br> as newline
@@ -127,14 +136,14 @@ def extract_vote_from_post_content(content_html, valid_players):
             else:
                 match = re.match(r'vote:\s*(.+)', cleaned, re.IGNORECASE)
                 if match:
-                    voted_raw = match.group(1).strip()
+                    voted_raw = match.group(1).strip().lower()
                     result = process.extractOne(voted_raw, valid_players, score_cutoff=70)
                     if result:
                         matched, score = result
-                        canonical_name = matched
+                        canonical_name = aka_lookup[matched]
                         last_vote = (canonical_name, None)
                     else:
-                        last_vote = (voted_raw, True)
+                        last_vote = (match.group(1).strip(), True)
 
     return last_vote
 
@@ -253,7 +262,7 @@ def get_current_votes(thread_url, start_post_num, stop_post_num, valid_players, 
         if not content_html:
             continue
 
-        vote_result = extract_vote_from_post_content(content_html, valid_players)
+        vote_result = extract_vote_from_post_content(content_html, valid_players, player_akas)
         if vote_result:
             vote, is_invalid = vote_result
 
@@ -277,7 +286,7 @@ def get_current_votes(thread_url, start_post_num, stop_post_num, valid_players, 
             votee_map[votee] = []
         votee_map[votee].append((voter, metadata["link"], post_counts.get(voter, 1)))
 
-    output_lines = ["[center]:bow:[b][size=4]Turby Org Vote Counter v1.0[/size][/b]:bow:[/center]"]
+    output_lines = ["[center]:bow: [b][size=4]Turby Org Vote Counter v1.0[/size][/b] :bow:[/center]"]
     output_lines.append(f"[center][i]Day {day} - Votes from post {start_post_num} through {last_cached_post}[/i][/center]\n")
     output_lines.append("[table]")
     output_lines.append("[tr][th]Votes[/th][th]Target[/th][th]Voters (Posts in Phase)[/th][/tr]")
@@ -348,6 +357,29 @@ def run_gui():
         root.update()
         messagebox.showinfo("Copied", "Votecount copied to clipboard!")
 
+    def player_aka():
+        global player_akas
+        selected = player_listbox.curselection()
+        if not selected:
+            messagebox.showwarning("No selection", "Please select a player to add an AKA for")
+            return
+        
+        if len(selected) > 1:
+            messagebox.showwarning("Too many seelctions", "Please select a single player to add an AKA for")
+            return
+        
+        main_name = player_listbox.get(selected[0])
+        aka = simpledialog.askstring("Add AKA", f"Enter a nickname for '{main_name}:")
+        if aka:
+            aka = aka.strip()
+            if main_name not in player_akas:
+                player_akas[main_name] = []
+            if aka not in player_akas[main_name]:
+                player_akas[main_name].append(aka)
+                messagebox.showinfo("AKA Added", f"'{aka} added as nickname for '{main_name}")
+            else:
+                messagebox.showinfo("Duplicate AKA", f"'{aka} is already an AKA for '{main_name}")
+    
     root = tk.Tk()
     root.title("Org Vote Counter")
     root.geometry("620x350")
@@ -389,6 +421,24 @@ def run_gui():
         exportselection=False,
         )
     player_listbox.place(x=320, y=30)
+    
+    aka_button = customtkinter.CTkButton(
+        master=root,
+        text="Player AKA",
+        font=("Arial", 10),
+        text_color="#000000",
+        hover=True,
+        hover_color="#949494",
+        height=50,
+        width=190,
+        border_width=2,
+        corner_radius=6,
+        border_color="#000000",
+        bg_color="#FFFFFF",
+        fg_color="#F0F0F0",
+        command=player_aka
+    )
+    aka_button.place(x=320, y=295)
     def add_player():
         popup = tk.Toplevel()
         popup.title("Add Player")
@@ -451,17 +501,27 @@ def run_gui():
         )
     Button_id16.place(x=520, y=120)
     def import_players():
-        file_path = filedialog.askopenfilename(filetypes=[("Text Files", "*.txt")])
-        if not file_path:
-            return
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    name = line.strip()
-                    if name and name not in player_listbox.get(0, tk.END):
-                        player_listbox.insert(tk.END, name)
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to import player list:\n{e}")
+        popup = customtkinter.CTkToplevel()
+        popup.title("Paste Player List")
+        popup.geometry("400x300")
+
+        label = customtkinter.CTkLabel(popup, text="Paste one player name per line:")
+        label.pack(pady=5)
+
+        text_box = customtkinter.CTkTextbox(popup, height=200)
+        text_box.pack(padx=10, pady=5, fill='both', expand=True)
+
+        def submit_players():
+            raw_input = text_box.get("1.0", tk.END)
+            names = [line.strip() for line in raw_input.splitlines() if line.strip()]
+            existing = set(player_listbox.get(0, tk.END))
+            for name in names:
+                if name not in existing:
+                    player_listbox.insert(tk.END, name)
+            popup.destroy()
+
+        submit_button = customtkinter.CTkButton(popup, text="Import", command=submit_players)
+        submit_button.pack(pady=10)
     Button_id17 = customtkinter.CTkButton(
         master=root,
         text="Import Players",
@@ -509,6 +569,7 @@ def run_gui():
         )
     Label_id3.place(x=0, y=30)
     global end_entry
+    global player_akas 
     end_entry = customtkinter.CTkEntry(
         master=root,
         placeholder_text="Day Ending Post # (Optional)",
@@ -634,7 +695,8 @@ def run_gui():
             "first_post": start_entry.get().strip(),
             "last_post": end_entry.get().strip(),
             "dayphase": day_entry.get().strip(),
-            "player_list": [player_listbox.get(i) for i in range(player_listbox.size())]
+            "player_list": [player_listbox.get(i) for i in range(player_listbox.size())],
+            "player_akas": player_akas
         }
         
         try:
@@ -645,6 +707,7 @@ def run_gui():
 
     def load_config():
         """Load settings from the JSON configuration file."""
+        global player_akas
         if os.path.exists(CONFIG_FILE):
             try:
                 with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -659,6 +722,7 @@ def run_gui():
                 # Populate the player list
                 for player in config.get("player_list", []):
                     player_listbox.insert(tk.END, player)
+                player_akas = config.get("player_akas", {})
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to load configuration: {e}")
     
