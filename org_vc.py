@@ -131,19 +131,24 @@ def extract_vote_from_post_content(content_html, valid_players, player_akas):
         for line in lines:
             cleaned = line.strip().lower()
 
-            if cleaned == "unvote":
+            if re.match(r'^unvote[:\s]*$', cleaned):
                 last_vote = ("UNVOTE", None)
             else:
                 match = re.match(r'vote:\s*(.+)', cleaned, re.IGNORECASE)
                 if match:
                     voted_raw = match.group(1).strip().lower()
-                    result = process.extractOne(voted_raw, match_pool, score_cutoff=70)
-                    if result:
-                        matched, score = result
-                        canonical_name = aka_lookup.get(matched, matched)
-                        last_vote = (canonical_name, None)
+                    if voted_raw == 'unvote':
+                        last_vote = ("UNVOTE", None)
+                    elif voted_raw == 'sleep':
+                        last_vote = ("SLEEP", None)
                     else:
-                        last_vote = (match.group(1).strip(), True)
+                        result = process.extractOne(voted_raw, match_pool, score_cutoff=70)
+                        if result:
+                            matched, score = result
+                            canonical_name = aka_lookup.get(matched, matched)
+                            last_vote = (canonical_name, None)
+                        else:
+                            last_vote = (match.group(1).strip(), True)
 
     return last_vote
 
@@ -272,6 +277,12 @@ def get_current_votes(thread_url, start_post_num, stop_post_num, valid_players, 
                         invalid_votes.remove((user, invalid_vote, link))
 
                 latest_votes[username] = (vote, {"link": post["link"], "thread_post_number": post["thread_post_number"]})
+                
+            elif not is_invalid and vote.upper() == "SLEEP":
+                for user, invalid_vote, link in invalid_votes[:]:
+                    if username == user:
+                        invalid_votes.remove((user, invalid_vote, link))
+                latest_votes[username] = (vote, {"link": post["link"], "thread_post_number": post["thread_post_number"]})
 
             elif vote.upper() == "UNVOTE":
                 latest_votes.pop(username, None)
@@ -279,9 +290,10 @@ def get_current_votes(thread_url, start_post_num, stop_post_num, valid_players, 
             elif username not in latest_votes:
                 invalid_votes.append((username, vote, post["link"]))
 
-    # === Tally and Output BBCode ===
+    sorted_votes = sorted(latest_votes.items(), key=lambda item: item[1][1]["thread_post_number"])
+
     votee_map = {}
-    for voter, (votee, metadata) in latest_votes.items():
+    for voter, (votee, metadata) in sorted_votes:
         if votee not in votee_map:
             votee_map[votee] = []
         votee_map[votee].append((voter, metadata["link"], post_counts.get(voter, 1)))
@@ -292,14 +304,14 @@ def get_current_votes(thread_url, start_post_num, stop_post_num, valid_players, 
     output_lines.append("[tr][th]Votes[/th][th]Target[/th][th]Voters (Posts in Phase)[/th][/tr]")
 
     for votee, voters in sorted(votee_map.items(), key=lambda x: -len(x[1])):
-        voter_strs = [f"{voter} ([url={link}]{count}[/url])" for voter, link, count in sorted(voters)]
+        voter_strs = [f"{voter} ([url={link}]{count}[/url])" for voter, link, count in voters]
         output_lines.append(f"[tr][td]{len(voters)}[/td][td][b]{votee}[/b][/td][td]{', '.join(voter_strs)}[/td][/tr]")
 
     voting_players = set(latest_votes.keys())
     not_voting = [p for p in valid_players if p not in voting_players]
 
     if not_voting:
-        not_voting_strs = [f"{name} ({post_counts.get(name, 0)})" for name in sorted(not_voting)]
+        not_voting_strs = [f"{name} ({post_counts.get(name, 0)})" for name in not_voting]
         output_lines.append(f"[tr][td]{len(not_voting)}[/td][td][b]Not Voting[/b][/td][td]{', '.join(not_voting_strs)}[/td][/tr]")
 
     if invalid_votes:
